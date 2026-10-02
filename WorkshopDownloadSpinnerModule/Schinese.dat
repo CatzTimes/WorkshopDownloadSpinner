@@ -1,5 +1,5 @@
-Name 创意工坊下载进度条
-Description 下载创意工坊物品时在服务器控制台显示旋转动画与下载进度。
+Name Unturned Workshop Download Spinner
+Description 为 Unturned 服务器控制台提供创意工坊下载进度条与预计剩余时间 | Spinner and Information when Downloading Workshop Items for Unturned.
 
 DownloadingText 正在下载 "{0}" ({1})
 

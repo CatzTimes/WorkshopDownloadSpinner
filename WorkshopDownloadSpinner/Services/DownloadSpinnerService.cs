@@ -414,17 +414,23 @@ namespace WorkshopDownloadSpinner.Services
 
         private void RenderDownloadLine(string downloadMessage, ulong bytesDownloaded, ulong bytesTotal)
         {
-            StringBuilder line = new();
-            line.Append(downloadMessage);
-            line.Append(' ');
-            line.Append(NextSpinnerChar());
-            line.Append(' ');
-            line.Append(DownloadProgressBar(bytesDownloaded, bytesTotal));
-            line.Append(' ');
-            line.Append(DownloadEstimate());
-            line.Append(' ');
-            line.Append(BuildEtaSegment(bytesDownloaded, bytesTotal));
-            line.Append("       "); // Speed and ETA change in size quite a bit, this is to prevent leftovers from the previous render
+            char spinner = NextSpinnerChar();
+            string line = BuildRenderLine(downloadMessage, bytesDownloaded, bytesTotal, spinner, includeEta: true);
+
+            // A row that reaches the buffer width auto-wraps: the cursor ends up on the next row
+            // (at column 0), every refresh then paints a new line and the console floods.
+            // CJK/fullwidth characters count as two cells, so the width must be display-aware.
+            int bufferWidth = TryGetBufferWidth();
+            if (bufferWidth > 1)
+            {
+                int maxWidth = bufferWidth - 1;
+                if (GetCellWidth(line) > maxWidth)
+                {
+                    line = BuildRenderLine(downloadMessage, bytesDownloaded, bytesTotal, spinner, includeEta: false);
+                }
+
+                line = ClampToCellWidth(line, maxWidth);
+            }
 
             try
             {
@@ -440,7 +446,95 @@ namespace WorkshopDownloadSpinner.Services
 
             // One Write per refresh keeps the line as atomic as System.Console allows,
             // minimizing interleaving with the game's own console output thread.
-            Console.Write(line.ToString());
+            Console.Write(line);
+        }
+
+        private string BuildRenderLine(string downloadMessage, ulong bytesDownloaded, ulong bytesTotal, char spinner, bool includeEta)
+        {
+            StringBuilder line = new();
+            line.Append(downloadMessage);
+            line.Append(' ');
+            line.Append(spinner);
+            line.Append(' ');
+            line.Append(DownloadProgressBar(bytesDownloaded, bytesTotal));
+            line.Append(' ');
+            line.Append(DownloadEstimate());
+
+            if (includeEta)
+            {
+                line.Append(' ');
+                line.Append(BuildEtaSegment(bytesDownloaded, bytesTotal));
+            }
+
+            line.Append("       "); // Speed and ETA change in size quite a bit, this is to prevent leftovers from the previous render
+            return line.ToString();
+        }
+
+        private static int TryGetBufferWidth()
+        {
+            try
+            {
+                return Console.BufferWidth;
+            }
+            catch (Exception)
+            {
+                // Console output is redirected — the clamp is skipped and the line is written as-is.
+                return -1;
+            }
+        }
+
+        private static int GetCellWidth(string text)
+        {
+            int width = 0;
+            foreach (char character in text)
+            {
+                width += IsWideChar(character) ? 2 : 1;
+            }
+
+            return width;
+        }
+
+        private static bool IsWideChar(char character)
+        {
+            return (character >= 0x1100 && character <= 0x115F)   // Hangul Jamo
+                || (character >= 0x2E80 && character <= 0x303E)   // CJK radicals, Kangxi radicals, CJK symbols
+                || (character >= 0x3041 && character <= 0x33FF)   // Hiragana through CJK compatibility
+                || (character >= 0x3400 && character <= 0x4DBF)   // CJK extension A
+                || (character >= 0x4E00 && character <= 0x9FFF)   // CJK unified ideographs
+                || (character >= 0xA000 && character <= 0xA4CF)   // Yi syllables
+                || (character >= 0xAC00 && character <= 0xD7A3)   // Hangul syllables
+                || (character >= 0xF900 && character <= 0xFAFF)   // CJK compatibility ideographs
+                || (character >= 0xFE30 && character <= 0xFE4F)   // CJK compatibility forms
+                || (character >= 0xFF00 && character <= 0xFF60)   // fullwidth forms
+                || (character >= 0xFFE0 && character <= 0xFFE6);  // fullwidth signs
+        }
+
+        /// <summary>
+        /// Trims characters from the end until the display width fits, so a write can never
+        /// reach the buffer's wrap boundary and break the in-place refresh.
+        /// </summary>
+        private static string ClampToCellWidth(string text, int maxWidth)
+        {
+            if (GetCellWidth(text) <= maxWidth)
+            {
+                return text;
+            }
+
+            StringBuilder clamped = new();
+            int width = 0;
+            foreach (char character in text)
+            {
+                int characterWidth = IsWideChar(character) ? 2 : 1;
+                if (width + characterWidth > maxWidth)
+                {
+                    break;
+                }
+
+                clamped.Append(character);
+                width += characterWidth;
+            }
+
+            return clamped.ToString();
         }
 
         private static void EndSessionVisuals()

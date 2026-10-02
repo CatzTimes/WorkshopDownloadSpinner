@@ -25,7 +25,7 @@ namespace WorkshopDownloadSpinner
 
             DedicatedUGC.installed += OnWorkshopItemsInstalled;
 
-            CommandWindow.Log($"WorkshopDownloadSpinner {Assembly.GetExecutingAssembly().GetName().Version} by Gamingtoday093 has been Initialized");
+            CommandWindow.Log($"Unturned Workshop Download Spinner {Assembly.GetExecutingAssembly().GetName().Version} by Gamingtoday093 & Catz has been Initialized");
         }
 
         public void shutdown()
