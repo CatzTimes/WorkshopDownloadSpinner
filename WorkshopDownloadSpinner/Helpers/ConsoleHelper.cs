@@ -43,6 +43,7 @@ namespace WorkshopDownloadSpinner.Helpers
                 catch (Exception exception) when (exception is InvalidOperationException or IOException or ObjectDisposedException)
                 {
                     // stdin is redirected or unavailable (service / docker / SSH without pty) — nothing to discard.
+                    global::WorkshopDownloadSpinner.DiagnosticLog.Write("console input discard loop stopped (stdin unavailable)", exception);
                     return Task.CompletedTask;
                 }
 

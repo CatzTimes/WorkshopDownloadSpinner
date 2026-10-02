@@ -20,7 +20,12 @@ namespace WorkshopDownloadSpinner
         {
             Instance = this;
 
-            SpinnerService = CreateSpinnerService();
+            SDG.Framework.Modules.Module? module = ModuleHook.getModuleByName("WorkshopDownloadSpinner");
+            string? moduleDirectory = module?.config.DirectoryPath;
+
+            BeginDiagnostics(moduleDirectory, out Local localization);
+
+            SpinnerService = CreateSpinnerService(localization);
             SpinnerService.StartWatching();
 
             DedicatedUGC.installed += OnWorkshopItemsInstalled;
@@ -39,36 +44,63 @@ namespace WorkshopDownloadSpinner
             }
         }
 
-        private static DownloadSpinnerService CreateSpinnerService()
+        private static void BeginDiagnostics(string? moduleDirectory, out Local localization)
         {
-            Local localization = LoadLocalization();
+            localization = LoadLocalization(moduleDirectory);
+
+            if (string.IsNullOrEmpty(moduleDirectory) || !DiagnosticLog.MarkerExists(moduleDirectory))
+            {
+                return;
+            }
+
+            if (DiagnosticLog.TryBegin(moduleDirectory))
+            {
+                CommandWindow.Log($"[WDSP] Diagnostic logging enabled: {DiagnosticLog.LogPath}");
+                DiagnosticLog.Write($"initialize: assemblyVersion={Assembly.GetExecutingAssembly().GetName().Version}");
+                DiagnosticLog.Write($"initialize: providerLanguage=\"{Provider.language}\", moduleDirectory=\"{moduleDirectory}\"");
+                DiagnosticLog.Write($"initialize: downloadingText=\"{localization.read(DownloadSpinnerService.DownloadingTextKey)}\", etaText=\"{localization.read(DownloadSpinnerService.EtaTextKey)}\"");
+            }
+            else
+            {
+                // TryBegin already reported the file system error to the console.
+                DiagnosticLog.Write("initialize: diagnostic log unavailable (marker found, log file creation failed)");
+            }
+        }
+
+        private static DownloadSpinnerService CreateSpinnerService(Local localization)
+        {
             DownloadSpinnerService service = new DownloadSpinnerService(localization);
 
             if (!service.CanWatchDedicatedUGC)
             {
                 CommandWindow.LogWarning("WorkshopDownloadSpinner: DedicatedUGC.currentDownload field not found, progress bar disabled (Unturned internals changed?)");
+                DiagnosticLog.Write("initialize: DedicatedUGC.currentDownload reflection field MISSING — watcher will never trigger");
+            }
+            else
+            {
+                DiagnosticLog.Write("initialize: DedicatedUGC.currentDownload reflection field resolved");
             }
 
             return service;
         }
 
-        private static Local LoadLocalization()
+        private static Local LoadLocalization(string? moduleDirectory)
         {
-            SDG.Framework.Modules.Module? module = ModuleHook.getModuleByName("WorkshopDownloadSpinner");
-            string? directoryPath = module?.config.DirectoryPath;
-            if (string.IsNullOrEmpty(directoryPath))
+            if (string.IsNullOrEmpty(moduleDirectory))
             {
+                DiagnosticLog.Write("initialize: module directory unknown, localization empty (progress texts fall back to hardcoded English)");
                 return new Local();
             }
 
             // Reads {Provider.language}.dat (chosen by the -Lang= command line parameter) and
             // falls back to English.dat, exactly like the vanilla /modules command does.
-            return Localization.tryRead(directoryPath, usePath: false);
+            return Localization.tryRead(moduleDirectory, usePath: false);
         }
 
         private void OnWorkshopItemsInstalled()
         {
             // Broadcast once all workshop items are finished installing; the watcher winds down.
+            DiagnosticLog.Write("event: DedicatedUGC.installed fired (all workshop items finished installing)");
             SpinnerService?.NotifyAllInstalled();
         }
     }

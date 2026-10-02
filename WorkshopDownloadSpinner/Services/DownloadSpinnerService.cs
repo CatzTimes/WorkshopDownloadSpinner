@@ -33,8 +33,8 @@ namespace WorkshopDownloadSpinner.Services
         /// </summary>
         private const int ALL_ZERO_STALL_TIMEOUT_MS = 10000;
 
-        private const string DownloadingTextKey = "DownloadingText";
-        private const string EtaTextKey = "EtaText";
+        public const string DownloadingTextKey = "DownloadingText";
+        public const string EtaTextKey = "EtaText";
 
         private static readonly char[] SpinnerChars = [ '-', '\\', '|', '/' ];
 
@@ -62,6 +62,12 @@ namespace WorkshopDownloadSpinner.Services
         private ulong lastDownloadedBytes;
         private float bytesPerSecond;
 
+        // Render telemetry of the most recent frame (watcher thread only, read by the milestone log).
+        private int lastRenderNaturalWidth;
+        private int lastRenderFinalWidth;
+        private int lastRenderBufferWidth = -1;
+        private bool lastRenderEtaDropped;
+
         public DownloadSpinnerService(Local localization)
         {
             this.localization = localization;
@@ -70,6 +76,8 @@ namespace WorkshopDownloadSpinner.Services
         public void StartWatching()
         {
             stopRequested = false;
+
+            DiagnosticLog.Write($"watcher: thread starting (idle poll every {IDLE_POLL_INTERVAL_MS}ms)");
 
             watcherThread = new Thread(WatchLoop)
             {
@@ -85,17 +93,20 @@ namespace WorkshopDownloadSpinner.Services
         /// </summary>
         public void NotifyAllInstalled()
         {
+            DiagnosticLog.Write("watcher: stop requested (all items installed)");
             stopRequested = true;
         }
 
         public void Shutdown()
         {
+            DiagnosticLog.Write($"shutdown: requested from thread '{Thread.CurrentThread.Name}'");
             stopRequested = true;
 
             Thread? thread = watcherThread;
             if (thread != null && thread.IsAlive && Thread.CurrentThread != thread)
             {
-                thread.Join(SHUTDOWN_JOIN_TIMEOUT_MS);
+                bool joined = thread.Join(SHUTDOWN_JOIN_TIMEOUT_MS);
+                DiagnosticLog.Write($"shutdown: join {(joined ? "completed" : "TIMED OUT")}, threadAlive={thread.IsAlive}");
             }
             watcherThread = null;
 
@@ -104,6 +115,7 @@ namespace WorkshopDownloadSpinner.Services
             // No newline here — the watcher prints it when it unwinds, and blocking console
             // writes on the main thread during shutdown must be avoided.
             SetConsoleInputEnabled(true);
+            DiagnosticLog.Write("shutdown: console state restored");
         }
 
         private void WatchLoop()
@@ -127,17 +139,21 @@ namespace WorkshopDownloadSpinner.Services
                     // postfix, which restarted the spinner for every newly dequeued workshop item.
                     if (currentDownload != PublishedFileId_t.Invalid && currentDownload.m_PublishedFileId != lastSeenDownload)
                     {
+                        DiagnosticLog.Write($"watcher: currentDownload changed {lastSeenDownload} -> {currentDownload.m_PublishedFileId}, starting session");
                         lastSeenDownload = currentDownload.m_PublishedFileId;
                         RunDownloadSession(currentDownload);
                     }
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
                     // The watcher must never die from an unexpected exception; retry after the idle delay.
+                    DiagnosticLog.Write("watcher: iteration threw an exception", exception);
                 }
 
                 Thread.Sleep(IDLE_POLL_INTERVAL_MS);
             }
+
+            DiagnosticLog.Write($"watcher: exiting (stopRequested={stopRequested}, isApplicationQuitting={Provider.isApplicationQuitting})");
         }
 
         private void RunDownloadSession(PublishedFileId_t item)
@@ -151,13 +167,18 @@ namespace WorkshopDownloadSpinner.Services
             // Whatever happens below (exceptions included), the console must be left usable.
             try
             {
+                uint startState = TryGetItemState(item);
+                DiagnosticLog.Write($"session: start item={item.m_PublishedFileId}, state=0x{startState:X}");
+
                 // Seed the estimate like the original coroutine did right before its delay.
                 if (TryGetDownloadInfo(item, out ulong seededDownloaded, out ulong seededTotal))
                 {
+                    DiagnosticLog.Write($"session: seed info ok, bytes={seededDownloaded}/{seededTotal}");
                     UpdateEstimate(seededDownloaded, seededTotal);
                 }
                 else
                 {
+                    DiagnosticLog.Write("session: seed info not available (download not started yet)");
                     UpdateEstimate(0, 0);
                 }
 
@@ -170,16 +191,21 @@ namespace WorkshopDownloadSpinner.Services
 
                 if (stopRequested || Provider.isApplicationQuitting)
                 {
+                    DiagnosticLog.Write($"session: cancelled during delay (stopRequested={stopRequested}, isApplicationQuitting={Provider.isApplicationQuitting})");
                     // Mirrors the original external StopSpinner: a single trailing newline.
                     return;
                 }
 
                 string downloadMessage = BuildDownloadMessage(item);
+                DiagnosticLog.Write($"session: render start, message=\"{downloadMessage}\"");
 
                 Console.WriteLine();
                 SetConsoleInputEnabled(false);
 
                 int zeroStallStartTick = 0;
+                int iteration = 0;
+                uint lastLoggedState = startState;
+                string endReason = "GetItemDownloadInfo returned false";
                 while (!stopRequested && !Provider.isApplicationQuitting)
                 {
                     if (!TryGetDownloadInfo(item, out ulong bytesDownloaded, out ulong bytesTotal))
@@ -187,12 +213,20 @@ namespace WorkshopDownloadSpinner.Services
                         break;
                     }
 
+                    uint state = TryGetItemState(item);
+                    if (state != lastLoggedState)
+                    {
+                        DiagnosticLog.Write($"session: state change 0x{lastLoggedState:X} -> 0x{state:X} at {bytesDownloaded}/{bytesTotal}");
+                        lastLoggedState = state;
+                    }
+
                     // The original module force-stopped the spinner from its installDownloadedItem
                     // patch; the state flags are the reflection-free equivalent of that signal.
                     // Without it, GetItemDownloadInfo may keep returning true with (0, 0) forever
                     // once Steam re-flags a finished item as needing an update.
-                    if (!IsDownloadActive(item))
+                    if (!IsDownloadActive(state))
                     {
+                        endReason = $"item no longer downloading (state=0x{state:X})";
                         break;
                     }
 
@@ -203,26 +237,44 @@ namespace WorkshopDownloadSpinner.Services
                         if (zeroStallStartTick == 0)
                         {
                             zeroStallStartTick = now;
+                            DiagnosticLog.Write("session: all-zero stall timer started");
                         }
                         else if (now - zeroStallStartTick > ALL_ZERO_STALL_TIMEOUT_MS)
                         {
+                            endReason = $"all-zero stall exceeded {ALL_ZERO_STALL_TIMEOUT_MS}ms";
                             break;
                         }
                     }
-                    else
+                    else if (zeroStallStartTick != 0)
                     {
                         zeroStallStartTick = 0;
+                        DiagnosticLog.Write("session: all-zero stall timer reset (bytes started moving)");
                     }
 
                     UpdateEstimate(bytesDownloaded, bytesTotal);
                     RenderDownloadLine(downloadMessage, bytesDownloaded, bytesTotal);
 
+                    iteration++;
+                    if (iteration % 25 == 0)
+                    {
+                        float percent = bytesTotal > 0 ? 100f * bytesDownloaded / bytesTotal : 0f;
+                        DiagnosticLog.Write($"session: milestone {percent:F1}% ({bytesDownloaded}/{bytesTotal}), state=0x{state:X}, bps={bytesPerSecond:F0}, width={lastRenderFinalWidth}/{lastRenderBufferWidth} (natural {lastRenderNaturalWidth}, etaDropped={lastRenderEtaDropped}), elapsed={sessionStopwatch.Elapsed.TotalSeconds:F1}s");
+                    }
+
                     Thread.Sleep(RENDER_INTERVAL_MS);
                 }
+
+                DiagnosticLog.Write($"session: end ({endReason}), iterations={iteration}, elapsed={sessionStopwatch.Elapsed.TotalSeconds:F1}s");
+            }
+            catch (Exception exception)
+            {
+                DiagnosticLog.Write("session: unexpected exception", exception);
+                throw;
             }
             finally
             {
                 EndSessionVisuals();
+                DiagnosticLog.Write("session: visuals restored (newline + console input enabled)");
             }
         }
 
@@ -263,10 +315,26 @@ namespace WorkshopDownloadSpinner.Services
             {
                 return SteamGameServerUGC.GetItemDownloadInfo(item, out bytesDownloaded, out bytesTotal);
             }
-            catch (Exception)
+            catch (Exception exception)
             {
                 // Steam GameServer API not initialized yet or already shut down.
+                DiagnosticLog.Write($"GetItemDownloadInfo({item.m_PublishedFileId}) threw", exception);
                 return false;
+            }
+        }
+
+        private const uint ItemStateUnknown = uint.MaxValue;
+
+        private static uint TryGetItemState(PublishedFileId_t item)
+        {
+            try
+            {
+                return SteamGameServerUGC.GetItemState(item);
+            }
+            catch (Exception exception)
+            {
+                DiagnosticLog.Write($"GetItemState({item.m_PublishedFileId}) threw", exception);
+                return ItemStateUnknown;
             }
         }
 
@@ -274,21 +342,20 @@ namespace WorkshopDownloadSpinner.Services
         /// True while Steam reports the item as downloading (or about to download).
         /// Used to end a session the same way the original module's installDownloadedItem patch did.
         /// </summary>
-        private static bool IsDownloadActive(PublishedFileId_t item)
+        private static bool IsDownloadActive(uint state)
         {
-            try
+            if (state == ItemStateUnknown)
             {
-                uint state = SteamGameServerUGC.GetItemState(item);
-                uint downloadFlags = (uint)EItemState.k_EItemStateDownloading | (uint)EItemState.k_EItemStateDownloadPending;
-                return (state & downloadFlags) != 0u;
-            }
-            catch (Exception)
-            {
-                // Steam GameServer API unavailable — never end the session on our own signal here;
+                // Steam hiccup — never end the session on our own signal here;
                 // the next GetItemDownloadInfo call will fail and break the loop instead.
                 return true;
             }
+
+            uint downloadFlags = (uint)EItemState.k_EItemStateDownloading | (uint)EItemState.k_EItemStateDownloadPending;
+            return (state & downloadFlags) != 0u;
         }
+
+        private static bool steamMemoryFailureLogged;
 
         private static void TryReleaseSteamThreadMemory()
         {
@@ -297,9 +364,14 @@ namespace WorkshopDownloadSpinner.Services
                 // Query calls allocate thread-local memory; RunCallbacks never pumps on our thread.
                 GameServer.ReleaseCurrentThreadMemory();
             }
-            catch (Exception)
+            catch (Exception exception)
             {
                 // Steam GameServer API not initialized yet or already shut down — retry later.
+                if (!steamMemoryFailureLogged)
+                {
+                    steamMemoryFailureLogged = true;
+                    DiagnosticLog.Write("ReleaseCurrentThreadMemory threw (will not log repeats)", exception);
+                }
             }
         }
 
@@ -416,6 +488,8 @@ namespace WorkshopDownloadSpinner.Services
         {
             char spinner = NextSpinnerChar();
             string line = BuildRenderLine(downloadMessage, bytesDownloaded, bytesTotal, spinner, includeEta: true);
+            int naturalWidth = GetCellWidth(line);
+            bool etaDropped = false;
 
             // A row that reaches the buffer width auto-wraps: the cursor ends up on the next row
             // (at column 0), every refresh then paints a new line and the console floods.
@@ -424,13 +498,19 @@ namespace WorkshopDownloadSpinner.Services
             if (bufferWidth > 1)
             {
                 int maxWidth = bufferWidth - 1;
-                if (GetCellWidth(line) > maxWidth)
+                if (naturalWidth > maxWidth)
                 {
                     line = BuildRenderLine(downloadMessage, bytesDownloaded, bytesTotal, spinner, includeEta: false);
+                    etaDropped = true;
                 }
 
                 line = ClampToCellWidth(line, maxWidth);
             }
+
+            lastRenderNaturalWidth = naturalWidth;
+            lastRenderFinalWidth = GetCellWidth(line);
+            lastRenderBufferWidth = bufferWidth;
+            lastRenderEtaDropped = etaDropped;
 
             try
             {
@@ -439,9 +519,10 @@ namespace WorkshopDownloadSpinner.Services
                     Console.CursorLeft = 0;
                 }
             }
-            catch (Exception)
+            catch (Exception exception)
             {
                 // Console output is redirected (service / docker / SSH without pty) — cursor APIs unavailable.
+                DiagnosticLog.Write("setting CursorLeft threw", exception);
             }
 
             // One Write per refresh keeps the line as atomic as System.Console allows,
@@ -549,9 +630,10 @@ namespace WorkshopDownloadSpinner.Services
             {
                 Console.CursorVisible = enabled;
             }
-            catch (Exception)
+            catch (Exception exception)
             {
                 // Cursor APIs are unavailable when console output is redirected.
+                DiagnosticLog.Write($"setting CursorVisible={enabled} threw", exception);
             }
 
             ConsoleHelper.DiscardConsoleInput = !enabled;
