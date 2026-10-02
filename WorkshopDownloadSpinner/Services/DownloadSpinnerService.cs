@@ -77,6 +77,7 @@ namespace WorkshopDownloadSpinner.Services
         {
             stopRequested = false;
 
+            ConsoleOutProxy.Install();
             DiagnosticLog.Write($"watcher: thread starting (idle poll every {IDLE_POLL_INTERVAL_MS}ms)");
 
             watcherThread = new Thread(WatchLoop)
@@ -356,13 +357,26 @@ namespace WorkshopDownloadSpinner.Services
         }
 
         private static bool steamMemoryFailureLogged;
+        private static bool steamMemoryDisabled;
 
         private static void TryReleaseSteamThreadMemory()
         {
+            if (steamMemoryDisabled)
+            {
+                return;
+            }
+
             try
             {
                 // Query calls allocate thread-local memory; RunCallbacks never pumps on our thread.
                 GameServer.ReleaseCurrentThreadMemory();
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                // Some Steamworks builds (e.g. the NuGet redist) do not export this native entry
+                // point — stop calling it instead of throwing once per second.
+                steamMemoryDisabled = true;
+                DiagnosticLog.Write("ReleaseCurrentThreadMemory is unavailable in this Steamworks build; disabled", exception);
             }
             catch (Exception exception)
             {
@@ -495,9 +509,9 @@ namespace WorkshopDownloadSpinner.Services
             // (at column 0), every refresh then paints a new line and the console floods.
             // CJK/fullwidth characters count as two cells, so the width must be display-aware.
             int bufferWidth = TryGetBufferWidth();
-            if (bufferWidth > 1)
+            int maxWidth = bufferWidth > 1 ? bufferWidth - 1 : -1;
+            if (maxWidth > 0)
             {
-                int maxWidth = bufferWidth - 1;
                 if (naturalWidth > maxWidth)
                 {
                     line = BuildRenderLine(downloadMessage, bytesDownloaded, bytesTotal, spinner, includeEta: false);
@@ -505,6 +519,15 @@ namespace WorkshopDownloadSpinner.Services
                 }
 
                 line = ClampToCellWidth(line, maxWidth);
+
+                // Pad to a constant row width so every frame fully overwrites the previous one —
+                // otherwise remnants of a longer frame (e.g. its ETA) survive on the row and the
+                // localized ETA text appears to be half-erased.
+                int width = GetCellWidth(line);
+                if (width < maxWidth)
+                {
+                    line += new string(' ', maxWidth - width);
+                }
             }
 
             lastRenderNaturalWidth = naturalWidth;
@@ -512,22 +535,25 @@ namespace WorkshopDownloadSpinner.Services
             lastRenderBufferWidth = bufferWidth;
             lastRenderEtaDropped = etaDropped;
 
-            try
+            lock (ConsoleOutProxy.Sync)
             {
-                if (Console.CursorLeft != 0 && Console.BufferWidth > 0)
+                try
                 {
-                    Console.CursorLeft = 0;
+                    if (Console.CursorLeft != 0 && Console.BufferWidth > 0)
+                    {
+                        Console.CursorLeft = 0;
+                    }
                 }
-            }
-            catch (Exception exception)
-            {
-                // Console output is redirected (service / docker / SSH without pty) — cursor APIs unavailable.
-                DiagnosticLog.Write("setting CursorLeft threw", exception);
-            }
+                catch (Exception exception)
+                {
+                    // Console output is redirected (service / docker / SSH without pty) — cursor APIs unavailable.
+                    DiagnosticLog.Write("setting CursorLeft threw", exception);
+                }
 
-            // One Write per refresh keeps the line as atomic as System.Console allows,
-            // minimizing interleaving with the game's own console output thread.
-            Console.Write(line);
+                // One Write per refresh keeps the line as atomic as System.Console allows.
+                Console.Write(line);
+                ConsoleOutProxy.ProgressRowActive = true;
+            }
         }
 
         private string BuildRenderLine(string downloadMessage, ulong bytesDownloaded, ulong bytesTotal, char spinner, bool includeEta)
@@ -620,7 +646,8 @@ namespace WorkshopDownloadSpinner.Services
 
         private static void EndSessionVisuals()
         {
-            Console.WriteLine();
+            // Ends the progress-bar row with a newline if one is on screen (no-op otherwise).
+            ConsoleOutProxy.EndProgressRow();
             SetConsoleInputEnabled(true);
         }
 
