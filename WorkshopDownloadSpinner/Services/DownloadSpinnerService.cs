@@ -26,6 +26,13 @@ namespace WorkshopDownloadSpinner.Services
         private const int STEAM_MEMORY_RELEASE_INTERVAL_MS = 1000;
         private const int SHUTDOWN_JOIN_TIMEOUT_MS = 1000;
 
+        /// <summary>
+        /// GetItemDownloadInfo can keep returning true with (0, 0) forever after an item finished
+        /// (e.g. Steam re-flags it k_EItemStateNeedsUpdate without a download running), so a session
+        /// that sees nothing but zeroes for this long is treated as finished regardless.
+        /// </summary>
+        private const int ALL_ZERO_STALL_TIMEOUT_MS = 10000;
+
         private const string DownloadingTextKey = "DownloadingText";
 
         private static readonly char[] SpinnerChars = [ '-', '\\', '|', '/' ];
@@ -171,11 +178,39 @@ namespace WorkshopDownloadSpinner.Services
                 Console.WriteLine();
                 SetConsoleInputEnabled(false);
 
+                int zeroStallStartTick = 0;
                 while (!stopRequested && !Provider.isApplicationQuitting)
                 {
                     if (!TryGetDownloadInfo(item, out ulong bytesDownloaded, out ulong bytesTotal))
                     {
                         break;
+                    }
+
+                    // The original module force-stopped the spinner from its installDownloadedItem
+                    // patch; the state flags are the reflection-free equivalent of that signal.
+                    // Without it, GetItemDownloadInfo may keep returning true with (0, 0) forever
+                    // once Steam re-flags a finished item as needing an update.
+                    if (!IsDownloadActive(item))
+                    {
+                        break;
+                    }
+
+                    if (bytesDownloaded == 0 && bytesTotal == 0)
+                    {
+                        // Safety net: a real download leaves the (0, 0) state almost immediately.
+                        int now = Environment.TickCount;
+                        if (zeroStallStartTick == 0)
+                        {
+                            zeroStallStartTick = now;
+                        }
+                        else if (now - zeroStallStartTick > ALL_ZERO_STALL_TIMEOUT_MS)
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        zeroStallStartTick = 0;
                     }
 
                     UpdateEstimate(bytesDownloaded, bytesTotal);
@@ -231,6 +266,26 @@ namespace WorkshopDownloadSpinner.Services
             {
                 // Steam GameServer API not initialized yet or already shut down.
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// True while Steam reports the item as downloading (or about to download).
+        /// Used to end a session the same way the original module's installDownloadedItem patch did.
+        /// </summary>
+        private static bool IsDownloadActive(PublishedFileId_t item)
+        {
+            try
+            {
+                uint state = SteamGameServerUGC.GetItemState(item);
+                uint downloadFlags = (uint)EItemState.k_EItemStateDownloading | (uint)EItemState.k_EItemStateDownloadPending;
+                return (state & downloadFlags) != 0u;
+            }
+            catch (Exception)
+            {
+                // Steam GameServer API unavailable — never end the session on our own signal here;
+                // the next GetItemDownloadInfo call will fail and break the loop instead.
+                return true;
             }
         }
 
