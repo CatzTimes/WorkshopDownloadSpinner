@@ -34,6 +34,7 @@ namespace WorkshopDownloadSpinner.Services
         private const int ALL_ZERO_STALL_TIMEOUT_MS = 10000;
 
         private const string DownloadingTextKey = "DownloadingText";
+        private const string EtaTextKey = "EtaText";
 
         private static readonly char[] SpinnerChars = [ '-', '\\', '|', '/' ];
 
@@ -370,6 +371,47 @@ namespace WorkshopDownloadSpinner.Services
             return $"{bytesPerSecond.ToBytesString()}/s";
         }
 
+        /// <summary>
+        /// Localized "ETA {0}" segment; "--" while the speed is unknown, "0s" once nothing remains.
+        /// </summary>
+        private string BuildEtaSegment(ulong bytesDownloaded, ulong bytesTotal)
+        {
+            string value = "--";
+            if (bytesTotal > 0 && bytesDownloaded >= bytesTotal)
+            {
+                value = "0s";
+            }
+            else if (bytesTotal > 0 && bytesPerSecond > 0f)
+            {
+                value = FormatDuration((bytesTotal - bytesDownloaded) / bytesPerSecond);
+            }
+
+            string template = localization.read(EtaTextKey);
+            if (string.IsNullOrEmpty(template))
+            {
+                template = "ETA {0}";
+            }
+
+            return string.Format(template, value);
+        }
+
+        private static string FormatDuration(double seconds)
+        {
+            if (seconds < 0.0 || double.IsNaN(seconds) || double.IsInfinity(seconds))
+            {
+                return "--";
+            }
+
+            long totalSeconds = (long)Math.Ceiling(seconds);
+            long hours = totalSeconds / 3600;
+            long minutes = totalSeconds % 3600 / 60;
+            long secs = totalSeconds % 60;
+
+            if (hours > 0) return $"{hours}h {minutes:D2}m";
+            if (minutes > 0) return $"{minutes}m {secs:D2}s";
+            return $"{secs}s";
+        }
+
         private void RenderDownloadLine(string downloadMessage, ulong bytesDownloaded, ulong bytesTotal)
         {
             StringBuilder line = new();
@@ -380,7 +422,9 @@ namespace WorkshopDownloadSpinner.Services
             line.Append(DownloadProgressBar(bytesDownloaded, bytesTotal));
             line.Append(' ');
             line.Append(DownloadEstimate());
-            line.Append("       "); // Download Estimate changes quite a bit in size, this is to prevent "0 B/s/sssss"
+            line.Append(' ');
+            line.Append(BuildEtaSegment(bytesDownloaded, bytesTotal));
+            line.Append("       "); // Speed and ETA change in size quite a bit, this is to prevent leftovers from the previous render
 
             try
             {

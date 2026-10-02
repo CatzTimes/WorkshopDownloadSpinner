@@ -15,6 +15,8 @@ Spinner and Information when Downloading Workshop Items for Unturned.
 >   to minimize interleaving with the game's own console output.
 > - **Localization.** Module metadata and the progress line follow the server language
 >   (`-Lang=` command line parameter). Ships with `English.dat` and `Schinese.dat`.
+> - **Estimated time remaining.** The progress line shows a live ETA next to the speed
+>   (localized, e.g. `ETA 1m 05s` / `剩余时间 1m 05s`).
 > - **Hardening.** All console cursor/keyboard operations are exception-guarded for redirected
 >   consoles, the speed estimate uses a monotonic stopwatch, and the input-discard loop no longer
 >   busy-spins a CPU core.

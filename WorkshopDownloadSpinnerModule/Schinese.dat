@@ -2,3 +2,5 @@ Name 创意工坊下载进度条
 Description 下载创意工坊物品时在服务器控制台显示旋转动画与下载进度。
 
 DownloadingText 正在下载 "{0}" ({1})
+
+EtaText 剩余时间 {0}
