@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
@@ -7,12 +7,12 @@
     <AssemblyName>$(Title)</AssemblyName>
     <Product>$(Title)</Product>
 	<Description>Spinner and Information when Downloading Workshop Items for Unturned.</Description>
-  
-	<Authors>Gamingtoday093</Authors>
-	
-	<AssemblyVersion>1.1.0.0</AssemblyVersion>
+
+	<Authors>Gamingtoday093, CatzTimes</Authors>
+
+	<AssemblyVersion>1.2.0.0</AssemblyVersion>
     <FileVersion>$(AssemblyVersion)</FileVersion>
-  
+
     <RootNamespace>WorkshopDownloadSpinner</RootNamespace>
 	<ProjectGuid>362fd99b-a830-43cb-902b-25f6041868f4</ProjectGuid>
   </PropertyGroup>
@@ -26,6 +26,11 @@
 	<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
+  <!-- $(SolutionDir) is only defined when building through the solution; fall back to the repo root for CLI builds. -->
+  <PropertyGroup>
+    <SolutionDir Condition="'$(SolutionDir)' == '' Or '$(SolutionDir)' == '*Undefined*'">$(MSBuildThisFileDirectory)..\</SolutionDir>
+  </PropertyGroup>
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>portable</DebugType>
@@ -34,7 +39,7 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <WarningLevel>9999</WarningLevel>
   </PropertyGroup>
-  
+
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>portable</DebugType>
     <Optimize>true</Optimize>
@@ -42,32 +47,15 @@
     <DefineConstants>TRACE</DefineConstants>
     <WarningLevel>9999</WarningLevel>
   </PropertyGroup>
-  
-  <ItemGroup>
-    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
-  </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>E:\SteamLibrary\steamapps\common\U3DS\Unturned_Data\Managed\Assembly-CSharp.dll</HintPath>
-	  <Private>False</Private>
-    </Reference>
-    <Reference Include="com.rlabrecque.steamworks.net">
-      <HintPath>E:\SteamLibrary\steamapps\common\U3DS\Unturned_Data\Managed\com.rlabrecque.steamworks.net.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>E:\SteamLibrary\steamapps\common\U3DS\Unturned_Data\Managed\UnityEngine.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>E:\SteamLibrary\steamapps\common\U3DS\Unturned_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
+    <PackageReference Include="RocketModFix.UnityEngine.Redist" Version="2022.3.62.3" />
+    <PackageReference Include="RocketModFix.Unturned.Redist.Server" Version="3.26.3.12" />
   </ItemGroup>
-  
+
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="xcopy &quot;$(TargetPath)&quot; &quot;$(SolutionDir)WorkshopDownloadSpinnerModule\&quot; /Y /I&#xD;&#xA;7z a &quot;$(SolutionDir)WorkshopDownloadSpinnerModule.zip&quot; &quot;$(SolutionDir)WorkshopDownloadSpinnerModule\&quot;" />
+    <Exec Command="xcopy &quot;$(TargetPath)&quot; &quot;$(SolutionDir)WorkshopDownloadSpinnerModule\&quot; /Y /I" />
+    <Exec Command="7z a &quot;$(SolutionDir)WorkshopDownloadSpinnerModule.zip&quot; &quot;$(SolutionDir)WorkshopDownloadSpinnerModule\&quot;" IgnoreExitCode="true" ContinueOnError="true" />
   </Target>
 
 </Project>

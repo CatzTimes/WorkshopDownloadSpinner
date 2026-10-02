@@ -1,81 +1,75 @@
-﻿using HarmonyLib;
 using SDG.Framework.Modules;
 using SDG.Unturned;
-using Steamworks;
 using System;
 using System.Reflection;
-using UnityEngine;
 using WorkshopDownloadSpinner.Services;
 
 namespace WorkshopDownloadSpinner
 {
-    [HarmonyPatch]
+    /// <summary>
+    /// Harmony-free reimplementation of the original module.
+    /// Instead of patching DedicatedUGC, a background watcher thread polls its currentDownload
+    /// field via reflection and renders the console progress bar off the game's main thread.
+    /// </summary>
     public class WorkshopDownloadSpinner : IModuleNexus
     {
         public static WorkshopDownloadSpinner Instance { get; private set; } = null!;
-        private Harmony Harmony { get; set; } = null!;
         private DownloadSpinnerService? SpinnerService { get; set; }
 
         public void initialize()
         {
             Instance = this;
 
-            Harmony = new Harmony("WorkshopDownloadSpinner");
-            Harmony.PatchAll();
+            SpinnerService = CreateSpinnerService();
+            SpinnerService.StartWatching();
 
-            SpinnerService = new GameObject("WorkshopDownloadSpinner").AddComponent<DownloadSpinnerService>();
+            DedicatedUGC.installed += OnWorkshopItemsInstalled;
 
             CommandWindow.Log($"WorkshopDownloadSpinner {Assembly.GetExecutingAssembly().GetName().Version} by Gamingtoday093 has been Initialized");
         }
 
         public void shutdown()
         {
-            Harmony.UnpatchAll(Harmony.Id);
+            DedicatedUGC.installed -= OnWorkshopItemsInstalled;
 
             if (SpinnerService != null)
             {
-                GameObject.Destroy(SpinnerService.gameObject);
+                SpinnerService.Shutdown();
                 SpinnerService = null;
             }
         }
 
-        [HarmonyPatch(typeof(DedicatedUGC), "installNextItem")]
-        [HarmonyPostfix]
-        private static void InstallNextItemPostfix(PublishedFileId_t ___currentDownload)
+        private static DownloadSpinnerService CreateSpinnerService()
         {
-            if (___currentDownload == PublishedFileId_t.Invalid) return;
-            if (Instance.SpinnerService == null) return;
-            
-            Instance.SpinnerService.StopSpinner();
-            Instance.SpinnerService.StartSpinner(___currentDownload);
+            Local localization = LoadLocalization();
+            DownloadSpinnerService service = new DownloadSpinnerService(localization);
+
+            if (!service.CanWatchDedicatedUGC)
+            {
+                CommandWindow.LogWarning("WorkshopDownloadSpinner: DedicatedUGC.currentDownload field not found, progress bar disabled (Unturned internals changed?)");
+            }
+
+            return service;
         }
 
-#if DEBUG
-        //[HarmonyPatch(typeof(DedicatedUGC), "onItemDownloaded")]
-        //[HarmonyPrefix]
-        //private static bool OnItemDownloadedPrefix(ref DownloadItemResult_t callback)
-        //{
-        //    callback.m_eResult = EResult.k_EResultFail;
-        //    return true;
-        //}
-#endif
-
-        [HarmonyPatch(typeof(DedicatedUGC), "installDownloadedItem")]
-        [HarmonyPostfix]
-        private static void InstallDownloadedItem(PublishedFileId_t fileId, string path)
+        private static Local LoadLocalization()
         {
-            Instance.SpinnerService?.StopSpinner();
+            SDG.Framework.Modules.Module? module = ModuleHook.getModuleByName("WorkshopDownloadSpinner");
+            string? directoryPath = module?.config.DirectoryPath;
+            if (string.IsNullOrEmpty(directoryPath))
+            {
+                return new Local();
+            }
+
+            // Reads {Provider.language}.dat (chosen by the -Lang= command line parameter) and
+            // falls back to English.dat, exactly like the vanilla /modules command does.
+            return Localization.tryRead(directoryPath, usePath: false);
         }
 
-        [HarmonyPatch(typeof(DedicatedUGC), "OnFinishedDownloadingItems")]
-        [HarmonyPostfix]
-        private static void OnFinishedDownloadingItemsPostfix()
+        private void OnWorkshopItemsInstalled()
         {
-            if (Instance.SpinnerService == null) return;
-
-            Instance.SpinnerService.StopSpinner();
-            GameObject.Destroy(Instance.SpinnerService.gameObject);
-            Instance.SpinnerService = null;
+            // Broadcast once all workshop items are finished installing; the watcher winds down.
+            SpinnerService?.NotifyAllInstalled();
         }
     }
 }
