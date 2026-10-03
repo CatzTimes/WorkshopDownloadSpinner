@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 
-namespace WorkshopDownloadSpinner
+namespace WorkshopDownloadSpinner.Diagnostics
 {
     /// <summary>
     /// Lightweight diagnostic logger. Inactive unless a "WorkshopDownloadSpinner.diagnostic"

@@ -368,3 +368,6 @@ FodyWeavers.xsd
 # Diagnostic artifacts
 /WorkshopDownloadSpinnerModule/WorkshopDownloadSpinner.diagnostic
 /WorkshopDownloadSpinnerModule/WorkshopDownloadSpinner-diagnostic.log
+
+# Mimosa security hook local state
+.mimosa/

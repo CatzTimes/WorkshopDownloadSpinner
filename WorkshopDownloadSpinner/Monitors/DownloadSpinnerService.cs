@@ -7,8 +7,12 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using WorkshopDownloadSpinner.Helpers;
+using global::WorkshopDownloadSpinner.Diagnostics;
+using global::WorkshopDownloadSpinner.Models;
+using global::WorkshopDownloadSpinner.Services;
+using static global::WorkshopDownloadSpinner.Configurations.ModuleOptions;
 
-namespace WorkshopDownloadSpinner.Services
+namespace WorkshopDownloadSpinner.Monitors
 {
     /// <summary>
     /// Harmony-free replacement for the original coroutine service.
@@ -18,24 +22,6 @@ namespace WorkshopDownloadSpinner.Services
     /// </summary>
     public class DownloadSpinnerService
     {
-        private const float DELAY_SECONDS = 1.5f;
-        private const int PROGRESS_BAR_LENGTH = 16;
-        private const float UPDATE_ESTIMATE_RATE_SECONDS = 2.5f;
-        private const int RENDER_INTERVAL_MS = 100;
-        private const int IDLE_POLL_INTERVAL_MS = 200;
-        private const int STEAM_MEMORY_RELEASE_INTERVAL_MS = 1000;
-        private const int SHUTDOWN_JOIN_TIMEOUT_MS = 1000;
-
-        /// <summary>
-        /// GetItemDownloadInfo can keep returning true with (0, 0) forever after an item finished
-        /// (e.g. Steam re-flags it k_EItemStateNeedsUpdate without a download running), so a session
-        /// that sees nothing but zeroes for this long is treated as finished regardless.
-        /// </summary>
-        private const int ALL_ZERO_STALL_TIMEOUT_MS = 10000;
-
-        public const string DownloadingTextKey = "DownloadingText";
-        public const string EtaTextKey = "EtaText";
-
         private static readonly char[] SpinnerChars = [ '-', '\\', '|', '/' ];
 
         private const char ProgressEmptyChar = ' ';
@@ -63,10 +49,7 @@ namespace WorkshopDownloadSpinner.Services
         private float bytesPerSecond;
 
         // Render telemetry of the most recent frame (watcher thread only, read by the milestone log).
-        private int lastRenderNaturalWidth;
-        private int lastRenderFinalWidth;
-        private int lastRenderBufferWidth = -1;
-        private bool lastRenderEtaDropped;
+        private readonly RenderTelemetry telemetry = new();
 
         public DownloadSpinnerService(Local localization)
         {
@@ -259,7 +242,7 @@ namespace WorkshopDownloadSpinner.Services
                     if (iteration % 25 == 0)
                     {
                         float percent = bytesTotal > 0 ? 100f * bytesDownloaded / bytesTotal : 0f;
-                        DiagnosticLog.Write($"session: milestone {percent:F1}% ({bytesDownloaded}/{bytesTotal}), state=0x{state:X}, bps={bytesPerSecond:F0}, width={lastRenderFinalWidth}/{lastRenderBufferWidth} (natural {lastRenderNaturalWidth}, etaDropped={lastRenderEtaDropped}), elapsed={sessionStopwatch.Elapsed.TotalSeconds:F1}s");
+                        DiagnosticLog.Write($"session: milestone {percent:F1}% ({bytesDownloaded}/{bytesTotal}), state=0x{state:X}, bps={bytesPerSecond:F0}, width={telemetry.FinalWidth}/{telemetry.BufferWidth} (natural {telemetry.NaturalWidth}, etaDropped={telemetry.EtaDropped}), elapsed={sessionStopwatch.Elapsed.TotalSeconds:F1}s");
                     }
 
                     Thread.Sleep(RENDER_INTERVAL_MS);
@@ -530,10 +513,10 @@ namespace WorkshopDownloadSpinner.Services
                 }
             }
 
-            lastRenderNaturalWidth = naturalWidth;
-            lastRenderFinalWidth = GetCellWidth(line);
-            lastRenderBufferWidth = bufferWidth;
-            lastRenderEtaDropped = etaDropped;
+            telemetry.NaturalWidth = naturalWidth;
+            telemetry.FinalWidth = GetCellWidth(line);
+            telemetry.BufferWidth = bufferWidth;
+            telemetry.EtaDropped = etaDropped;
 
             lock (ConsoleOutProxy.Sync)
             {

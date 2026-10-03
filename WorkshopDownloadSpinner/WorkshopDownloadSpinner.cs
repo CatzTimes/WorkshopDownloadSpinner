@@ -2,6 +2,9 @@ using SDG.Framework.Modules;
 using SDG.Unturned;
 using System;
 using System.Reflection;
+using global::WorkshopDownloadSpinner.Configurations;
+using global::WorkshopDownloadSpinner.Diagnostics;
+using global::WorkshopDownloadSpinner.Monitors;
 using WorkshopDownloadSpinner.Services;
 
 namespace WorkshopDownloadSpinner
@@ -58,7 +61,7 @@ namespace WorkshopDownloadSpinner
                 CommandWindow.Log($"[WDSP] Diagnostic logging enabled: {DiagnosticLog.LogPath}");
                 DiagnosticLog.Write($"initialize: assemblyVersion={Assembly.GetExecutingAssembly().GetName().Version}");
                 DiagnosticLog.Write($"initialize: providerLanguage=\"{Provider.language}\", moduleDirectory=\"{moduleDirectory}\"");
-                DiagnosticLog.Write($"initialize: downloadingText=\"{localization.read(DownloadSpinnerService.DownloadingTextKey)}\", etaText=\"{localization.read(DownloadSpinnerService.EtaTextKey)}\"");
+                DiagnosticLog.Write($"initialize: downloadingText=\"{localization.read(ModuleOptions.DownloadingTextKey)}\", etaText=\"{localization.read(ModuleOptions.EtaTextKey)}\"");
             }
             else
             {
